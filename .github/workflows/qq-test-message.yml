@@ -1,0 +1,65 @@
+name: QQ Test Message
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_message:
+        description: 'Custom message (leave empty for default)'
+        required: false
+        default: ''
+
+jobs:
+  test-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Test Message to QQ Group
+        env:
+          QQ_BOT_APP_ID: ${{ secrets.QQ_BOT_APP_ID }}
+          QQ_BOT_APP_SECRET: ${{ secrets.QQ_BOT_APP_SECRET }}
+          QQ_GROUP_OPENID: ${{ secrets.QQ_GROUP_OPENID }}
+          CUSTOM_MESSAGE: ${{ github.event.inputs.custom_message }}
+        run: |
+          if [ -z "$QQ_BOT_APP_ID" ] || [ -z "$QQ_BOT_APP_SECRET" ]; then
+            echo "QQ Bot AppID or AppSecret is missing."
+            exit 1
+          fi
+          if [ -z "$QQ_GROUP_OPENID" ]; then
+            echo "QQ Group OpenID is missing."
+            exit 1
+          fi
+
+          # Obtain access token
+          TOKEN_RESPONSE=$(curl -s -X POST "https://bots.qq.com/app/getAppAccessToken" \
+            -H "Content-Type: application/json" \
+            -d "{\"appId\":\"$QQ_BOT_APP_ID\",\"clientSecret\":\"$QQ_BOT_APP_SECRET\"}")
+
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+            echo "Failed to get access token: $TOKEN_RESPONSE"
+            exit 1
+          fi
+
+          # Build markdown message
+          if [ -n "$CUSTOM_MESSAGE" ]; then
+            MD_CONTENT="$CUSTOM_MESSAGE"
+          else
+            MD_CONTENT=$(printf '## QQ Bot Test\n\nIf you see this, the QQ Bot workflow is configured correctly.\n\n- **Time**: %s\n- **Repo**: ${{ github.repository }}' "$(date '+%Y-%m-%d %H:%M:%S %Z')")
+          fi
+
+          # Send as markdown
+          JSON_PAYLOAD=$(jq -n --arg md "$MD_CONTENT" '{msg_type: 2, markdown: {content: $md}}')
+
+          RESPONSE=$(curl -s -X POST \
+            "https://api.bot.qq.com/v2/groups/$QQ_GROUP_OPENID/messages" \
+            -H "Authorization: QQBot $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD")
+
+          echo "Response: $RESPONSE"
+
+          if echo "$RESPONSE" | jq -e '.id' > /dev/null 2>&1; then
+            echo "Message sent successfully!"
+          else
+            echo "Failed to send message."
+            exit 1
+          fi
